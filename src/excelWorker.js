@@ -1,35 +1,13 @@
 import * as XLSX from "xlsx";
 
-const DATE_WORDS = [
-  "date", "day", "month", "year", "time", "timestamp", "period",
-  "created", "updated", "invoice date", "order date", "transaction date",
-  "delivery", "dispatch", "joining", "entry", "posting"
-];
-
-const MEASURE_WORDS = [
-  "amount", "value", "sales", "sale", "revenue", "price", "cost", "profit",
-  "income", "expense", "total", "qty", "quantity", "units", "volume", "balance",
-  "stock", "rate", "count", "target", "budget", "margin"
-];
-
-const ID_WORDS = ["id", "code", "no", "number", "phone", "mobile", "zip", "pin"];
-
-const ALIASES = {
-  qty: "Quantity", "qty.": "Quantity", qnty: "Quantity", quantity: "Quantity",
-  amt: "Amount", "amt.": "Amount", amount: "Amount", value: "Amount",
-  sales: "Sales", sale: "Sales", revenue: "Revenue", rev: "Revenue",
-  date: "Date", dt: "Date", "dt.": "Date", customer: "Customer", cust: "Customer",
-  product: "Product", item: "Product", region: "Region", location: "Location",
-  status: "Status", department: "Department"
-};
+const MAX_ROWS = 50000;
+const SAMPLE_SIZE = 500;
 
 function text(value) {
   if (value === null || value === undefined || value === "") return "";
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? "" : isoDate(value);
-  if (typeof value === "object") {
-    try { return JSON.stringify(value); } catch { return String(value); }
-  }
-  return String(value).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function isoDate(date) {
@@ -38,221 +16,195 @@ function isoDate(date) {
 }
 
 function parseNumber(value) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  const raw = text(value);
-  if (!raw) return null;
-  const negative = /^\(.*\)$/.test(raw);
-  const cleaned = raw
-    .replace(/[₹$€£¥₽,%]/g, "")
-    .replace(/\s/g, "")
-    .replace(/[^\d.+-]/g, "");
-  if (!cleaned || cleaned === "." || cleaned === "-" || cleaned === "+") return null;
-  const number = Number(cleaned);
-  return Number.isFinite(number) ? (negative ? -number : number) : null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function parseDate(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const d = XLSX.SSF.parse_date_code(value);
-    if (d?.y && d?.m && d?.d) return new Date(d.y, d.m - 1, d.d);
+  if (!value) return null;
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(y, m - 1, d);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
-  const raw = text(value);
-  if (!raw) return null;
-
-  // ISO / browser-readable dates first.
-  const direct = new Date(raw);
-  if (!Number.isNaN(direct.getTime()) && /\d{4}/.test(raw)) return direct;
-
-  const parts = raw.split(/[./-]/).map(Number);
-  if (parts.length !== 3 || !parts.every(Number.isFinite)) return null;
-  let [a, b, c] = parts;
-  if (c < 100) c += 2000;
-  if (a >= 1000) return new Date(a, b - 1, c);
-  if (c >= 1000) {
-    // Prefer DD/MM/YYYY when the first part is > 12; otherwise MM/DD/YYYY.
-    if (a > 12) return new Date(c, b - 1, a);
-    if (b > 12) return new Date(c, a - 1, b);
-    return new Date(c, a - 1, b);
+  if (typeof value === "number" && value > 0 && value < 100000) {
+    const date = new Date((value - 25569) * 86400000);
+    return Number.isNaN(date.getTime()) ? null : date;
   }
-  return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function normalizeHeader(value, index) {
-  const raw = text(value);
-  if (!raw) return `Column ${index + 1}`;
-  const key = raw.toLowerCase();
-  if (ALIASES[key]) return ALIASES[key];
-  return raw
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (m) => m.toUpperCase());
+  if (typeof value === "string") {
+    let normalized = value.trim();
+    if (!normalized) normalized = `Column ${index + 1}`;
+    return normalized;
+  }
+  return `Column ${index + 1}`;
 }
 
 function uniqueName(name, used) {
-  const base = text(name) || "Column";
-  let candidate = base;
-  let counter = 2;
-  while (used.has(candidate.toLowerCase())) candidate = `${base} ${counter++}`;
-  used.add(candidate.toLowerCase());
-  return candidate;
+  if (!used.has(name)) {
+    used.add(name);
+    return name;
+  }
+  for (let i = 1; i <= 1000; i++) {
+    const candidate = `${name} ${i}`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
+  return name;
 }
 
 function findHeaderRow(rawRows) {
-  const limit = Math.min(rawRows.length, 30);
-  let bestIndex = 0;
-  let bestScore = -Infinity;
-  for (let i = 0; i < limit; i += 1) {
-    const row = Array.isArray(rawRows[i]) ? rawRows[i] : [];
-    const cells = row.map(text);
-    const nonEmpty = cells.filter(Boolean);
-    if (nonEmpty.length < 2) continue;
-    const unique = new Set(nonEmpty.map((x) => x.toLowerCase())).size;
-    let labelLike = 0;
-    for (const value of nonEmpty) {
-      if (/[a-zA-Z]/.test(value) && !/^\d+(?:[.,]\d+)?$/.test(value)) labelLike += 1;
+  if (rawRows.length === 0) return 0;
+  for (let i = 0; i < Math.min(10, rawRows.length); i++) {
+    const row = rawRows[i];
+    if (!Array.isArray(row)) continue;
+    let headerCount = 0;
+    for (const cell of row) {
+      if (typeof cell === "string" && cell.trim().length > 0) headerCount++;
     }
-    const score = nonEmpty.length * 2 + unique + labelLike * 1.5 - i * 0.4;
-    if (score > bestScore) { bestScore = score; bestIndex = i; }
+    if (headerCount >= row.length * 0.5) return i;
   }
-  return bestIndex;
+  return 0;
 }
 
 function inferType(values, header) {
-  const sample = [];
-  for (const value of values) {
-    if (text(value) !== "") sample.push(value);
-    if (sample.length >= 300) break;
-  }
-  if (!sample.length) return "text";
+  let dateCount = 0;
+  let numberCount = 0;
+  let validCount = 0;
 
-  let dates = 0;
-  let numbers = 0;
-  for (const value of sample) {
-    if (parseDate(value)) dates += 1;
-    if (parseNumber(value) !== null) numbers += 1;
-  }
-  const dateScore = dates / sample.length;
-  const numberScore = numbers / sample.length;
-  const h = text(header).toLowerCase();
-  const dateHint = DATE_WORDS.some((word) => h.includes(word));
-  const idHint = ID_WORDS.some((word) => h === word || h.endsWith(` ${word}`));
+  for (const val of values) {
+    if (val === "" || val === null || val === undefined) continue;
+    validCount++;
 
-  if (dateHint && dateScore >= 0.55) return "date";
-  if (dateScore >= 0.90 && numberScore < 0.80) return "date";
-  if (numberScore >= 0.90 && !idHint) return "number";
-  return "text";
+    const num = parseNumber(val);
+    if (num !== null) numberCount++;
+
+    const date = parseDate(val);
+    if (date) dateCount++;
+  }
+
+  if (validCount === 0) return { isNumeric: false, isDate: false, isDimension: false };
+
+  const dateRatio = dateCount / validCount;
+  const numberRatio = numberCount / validCount;
+
+  const isDate = dateRatio > 0.5;
+  const isNumeric = numberRatio > 0.5 && !isDate;
+  const isDimension = !isNumeric && !isDate;
+  const measureHint = isNumeric && (header.toLowerCase().includes("total") || header.toLowerCase().includes("amount") || header.toLowerCase().includes("value") || header.toLowerCase().includes("count"));
+
+  return { isNumeric, isDate, isDimension, measureHint };
 }
 
 function detectColumns(rows, headers) {
-  return headers.map((header, index) => {
-    const values = new Array(rows.length);
-    const uniqueSet = new Set();
-    for (let i = 0; i < rows.length; i += 1) {
-      const value = rows[i][index];
-      values[i] = value;
-      const normalized = text(value);
-      if (normalized) uniqueSet.add(normalized);
-    }
-    const type = inferType(values, header);
-    const measureHint = MEASURE_WORDS.some((word) => header.toLowerCase().includes(word));
-    return {
-      index,
-      header,
-      type,
-      unique: uniqueSet.size,
-      measureHint,
-      isDate: type === "date",
-      isNumeric: type === "number",
-      isDimension: type === "text" && uniqueSet.size > 1
-    };
-  });
+  const columns = [];
+  const sampleRows = rows.slice(0, Math.min(SAMPLE_SIZE, rows.length));
+
+  for (let i = 0; i < headers.length; i++) {
+    const values = sampleRows.map((row) => row[headers[i]]).filter((v) => v !== null && v !== undefined);
+    const type = inferType(values, headers[i]);
+    
+    const uniqueValues = new Set(values.map(String));
+    columns.push({
+      header: headers[i],
+      index: i,
+      isNumeric: type.isNumeric,
+      isDate: type.isDate,
+      isDimension: type.isDimension,
+      unique: uniqueValues.size,
+      measureHint: type.measureHint
+    });
+  }
+  return columns;
 }
 
 function safeValue(value, type) {
   if (value === null || value === undefined || value === "") return "";
-  if (type === "number") {
-    const number = parseNumber(value);
-    return number === null ? text(value) : number;
+  if (type.isNumeric) {
+    const n = parseNumber(value);
+    return n !== null ? n : "";
   }
-  if (type === "date") {
-    const date = parseDate(value);
-    return date ? isoDate(date) : text(value);
+  if (type.isDate) {
+    const d = parseDate(value);
+    if (d) return isoDate(d);
+    return "";
   }
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
   return text(value);
 }
 
 function cleanSheet(sheet, name) {
-  const raw = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    defval: "",
-    raw: true,
-    blankrows: false
-  });
-  if (!raw.length) return null;
+  const rawRows = sheet.get_array ? sheet.get_array() : XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+  
+  if (rawRows.length === 0) return null;
 
-  const headerRowIndex = findHeaderRow(raw);
-  const sourceHeaders = Array.isArray(raw[headerRowIndex]) ? raw[headerRowIndex] : [];
-  let maxCols = sourceHeaders.length;
-  for (const row of raw) if (Array.isArray(row) && row.length > maxCols) maxCols = row.length;
-  if (maxCols === 0) return null;
-
-  const used = new Set();
-  const headers = new Array(maxCols);
-  for (let i = 0; i < maxCols; i += 1) headers[i] = uniqueName(normalizeHeader(sourceHeaders[i], i), used);
-
-  const matrix = [];
-  for (let r = headerRowIndex + 1; r < raw.length; r += 1) {
-    const source = Array.isArray(raw[r]) ? raw[r] : [];
-    const row = new Array(maxCols);
-    let hasValue = false;
-    for (let c = 0; c < maxCols; c += 1) {
-      const value = source[c] ?? "";
-      row[c] = value;
-      if (text(value) !== "") hasValue = true;
+  const headerRowIndex = findHeaderRow(rawRows);
+  const headerRow = Array.isArray(rawRows[headerRowIndex]) ? rawRows[headerRowIndex] : [];
+  
+  const usedNames = new Set();
+  const headers = headerRow.map((h, i) => uniqueName(normalizeHeader(h, i), usedNames));
+  
+  const rows = [];
+  for (let i = headerRowIndex + 1; i < Math.min(headerRowIndex + 1 + MAX_ROWS, rawRows.length); i++) {
+    const rawRow = rawRows[i];
+    if (!Array.isArray(rawRow)) continue;
+    
+    const row = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = rawRow[j] ?? "";
     }
-    if (hasValue) matrix.push(row);
+    rows.push(row);
   }
 
-  const columns = detectColumns(matrix, headers);
-  const rows = new Array(matrix.length);
-  for (let r = 0; r < matrix.length; r += 1) {
-    const source = matrix[r];
-    const output = { __row: r + 1 };
-    for (const column of columns) output[column.header] = safeValue(source[column.index], column.type);
-    rows[r] = output;
-  }
+  const columns = detectColumns(rows, headers);
 
-  return {
-    name,
-    headerRow: headerRowIndex + 1,
-    headers,
-    columns,
-    rows,
-    sourceRows: raw.length
-  };
+  const cleanedRows = rows.map((row) => {
+    const cleaned = {};
+    for (const column of columns) {
+      cleaned[column.header] = safeValue(row[column.header], column);
+    }
+    return cleaned;
+  });
+
+  return { name, headers, rows: cleanedRows, columns, headerRow: headerRowIndex + 1 };
 }
 
 function processWorkbook(buffer) {
-  const workbook = XLSX.read(buffer, { type: "array", cellDates: true, cellNF: false, cellStyles: false });
-  const sheets = [];
-  for (const name of workbook.SheetNames) {
-    const cleaned = cleanSheet(workbook.Sheets[name], name);
-    if (cleaned?.rows?.length) sheets.push(cleaned);
+  try {
+    const workbook = XLSX.read(buffer, { cellDates: true, cellFormulas: false });
+    const sheets = [];
+
+    for (const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      const cleaned = cleanSheet(sheet, sheetName);
+      if (cleaned && cleaned.rows.length > 0) {
+        sheets.push(cleaned);
+      }
+    }
+
+    if (sheets.length === 0) {
+      return { ok: false, error: "No data found in workbook." };
+    }
+
+    return { ok: true, result: { sheets } };
+  } catch (error) {
+    console.error("Workbook processing error:", error);
+    return { ok: false, error: error.message || "Failed to process workbook." };
   }
-  if (!sheets.length) throw new Error("No usable table data was found in this workbook.");
-  return { sheetNames: sheets.map((sheet) => sheet.name), sheets };
 }
 
 self.onmessage = async (event) => {
-  const { id, buffer } = event.data || {};
-  if (!id) return;
+  const { id, buffer } = event.data;
   try {
     const result = processWorkbook(buffer);
-    self.postMessage({ id, ok: true, result });
+    self.postMessage({ id, ...result });
   } catch (error) {
-    self.postMessage({ id, ok: false, error: error?.message || "The workbook could not be processed." });
+    console.error("Worker error:", error);
+    self.postMessage({ id, ok: false, error: "Excel processing failed." });
   }
 };
