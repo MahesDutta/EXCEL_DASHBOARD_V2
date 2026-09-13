@@ -245,19 +245,54 @@ function exportCSV(rows, headers) {
 }
 
 function Empty({ title, text }) {
-  return <div className="empty-state"><Database size={30} /><strong>{title}</strong><span>{text}</span></div>;
+  return (
+    <div className="empty-state">
+      <Database size={30} />
+      <strong>{title}</strong>
+      <span>{text}</span>
+    </div>
+  );
 }
 
 function KPI({ icon, label, value, detail }) {
-  return <article className="kpi-card"><div className="kpi-icon">{icon}</div><div className="kpi-body"><div className="kpi-label">{label}</div><div className="kpi-value" title={String(value)}>{value}</div><div className="kpi-detail">{detail}</div></div></article>;
+  return (
+    <article className="kpi-card">
+      <div className="kpi-icon">{icon}</div>
+      <div className="kpi-body">
+        <div className="kpi-label">{label}</div>
+        <div className="kpi-value" title={String(value)}>{value}</div>
+        <div className="kpi-detail">{detail}</div>
+      </div>
+    </article>
+  );
 }
 
 function ChartCard({ title, subtitle, children, wide = false }) {
-  return <section className={`chart-card${wide ? " chart-wide" : ""}`}><div className="chart-head"><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div><div className="chart-area">{children}</div></section>;
+  return (
+    <section className={`chart-card${wide ? " chart-wide" : ""}`}>
+      <div className="chart-head">
+        <h3>{title}</h3>
+        {subtitle && <p>{subtitle}</p>}
+      </div>
+      <div className="chart-area">{children}</div>
+    </section>
+  );
 }
 
 function FilterSelect({ label, value, options, onChange }) {
-  return <label className="filter-control"><span>{label}</span><div className="select-wrap"><select value={value} onChange={(event) => onChange(event.target.value)}><option value="">All</option>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></div></label>;
+  return (
+    <label className="filter-control">
+      <span>{label}</span>
+      <div className="select-wrap">
+        <select value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">All</option>
+          {options.map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+      </div>
+    </label>
+  );
 }
 
 function App() {
@@ -275,14 +310,12 @@ function App() {
     try { return localStorage.getItem("excel-dashboard-theme") || "light"; } catch { return "light"; }
   });
   const [showFilters, setShowFilters] = useState(true);
-  const [showData, setShowData] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [charts, setCharts] = useState({ trend: true, monthly: true, ranking: true, mix: true });
 
   useEffect(() => {
     try {
-      // Construct worker path correctly for GitHub Pages
       const workerPath = new URL("./excelWorker.js", import.meta.url).href;
       const worker = new Worker(workerPath, { type: "module" });
       workerRef.current = worker;
@@ -304,7 +337,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    try { localStorage.setItem("excel-dashboard-theme", theme); } catch { /* storage may be unavailable */ }
+    try { localStorage.setItem("excel-dashboard-theme", theme); } catch { }
   }, [theme]);
 
   const sheet = workbook?.sheets?.[sheetIndex] || null;
@@ -381,7 +414,7 @@ function App() {
 
   function handleFile(file) {
     if (!file || !workerRef.current) return;
-    setLoading(true); setError(""); setWorkbook(null); setShowData(false);
+    setLoading(true); setError(""); setWorkbook(null);
     if (file.size > MAX_FILE_MB * 1024 * 1024) {
       setLoading(false);
       setError(`This file is ${Math.ceil(file.size / 1024 / 1024)} MB. For reliable browser processing, please use a file smaller than ${MAX_FILE_MB} MB.`);
@@ -424,14 +457,39 @@ function App() {
   return (
     <div className={`app ${theme}`}>
       <header className="topbar">
-        <div className="brand"><div className="brand-mark"><BarChart3 size={19} /></div><div><strong>Excel Intelligence</strong><span>Business Dashboard Studio</span></div></div>
+        <div className="brand">
+          <div className="brand-mark"><BarChart3 size={19} /></div>
+          <div>
+            <strong>Excel Intelligence</strong>
+            <span>Business Dashboard Studio</span>
+          </div>
+        </div>
         <div className="top-actions">
-          {workbook && <><button className="btn secondary" onClick={() => fileInputRef.current?.click()}><RefreshCcw size={16} /> Replace file</button><button className="btn secondary" onClick={() => downloadBlob(JSON.stringify(filteredRows, null, 2), "dashboard-data.json", "application/json")}><FileDown size={16} /> JSON</button></>
-          <button className="icon-btn" title="Toggle theme" onClick={toggleTheme}>{theme === "light" ? <Moon size={18} /> : <Sun size={18} />}</button>
+          {workbook && (
+            <>
+              <button className="btn secondary" onClick={() => fileInputRef.current?.click()}>
+                <RefreshCcw size={16} /> Replace file
+              </button>
+              <button className="btn secondary" onClick={() => downloadBlob(JSON.stringify(filteredRows, null, 2), "dashboard-data.json", "application/json")}>
+                <FileDown size={16} /> JSON
+              </button>
+            </>
+          )}
+          <button className="icon-btn" title="Toggle theme" onClick={toggleTheme}>
+            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
         </div>
       </header>
 
-      {loading && <div className="loading-overlay" role="status" aria-live="polite"><div className="loading-card"><div className="loading-spinner" /><strong>Processing your Excel file…</strong><span>This may take up to 30 seconds on large workbooks.</span></div></div>}
+      {loading && (
+        <div className="loading-overlay" role="status" aria-live="polite">
+          <div className="loading-card">
+            <div className="loading-spinner" />
+            <strong>Processing your Excel file…</strong>
+            <span>This may take up to 30 seconds on large workbooks.</span>
+          </div>
+        </div>
+      )}
 
       <main>
         {!workbook ? (
@@ -440,64 +498,414 @@ function App() {
             <h1>Turn messy Excel data into a <span>decision-ready dashboard.</span></h1>
             <p>Upload a workbook and the app automatically detects structure, cleans values, creates dynamic filters, builds large charts and generates local business insights.</p>
             <button className="upload-card" onClick={() => fileInputRef.current?.click()}>
-              <div className="upload-icon"><Upload size={25} /></div><strong>Upload your Excel file</strong><span>Choose .xlsx, .xls or .csv from your device</span><small>Data is processed locally in your browser</small>
+              <div className="upload-icon"><Upload size={25} /></div>
+              <strong>Upload your Excel file</strong>
+              <span>Choose .xlsx, .xls or .csv from your device</span>
+              <small>Data is processed locally in your browser</small>
             </button>
-            <div className="feature-grid"><div><WandSparkles size={18} /><strong>Automatic cleaning</strong><span>Detects headers, types and messy values.</span></div><div><Filter size={18} /><strong>Smart filters</strong><span>Date range, category, and full-text search.</span></div><div><BarChart3 size={18} /><strong>Interactive charts</strong><span>Trends, rankings, mix and custom metrics.</span></div><div><Download size={18} /><strong>Export cleaned data</strong><span>CSV and Excel with normalized values.</span></div></div>
-            {error && <div className="error-box"><AlertTriangle size={18} /> <span>{error}</span></div>}
+            <div className="feature-grid">
+              <div>
+                <WandSparkles size={18} />
+                <strong>Automatic cleaning</strong>
+                <span>Detects headers, types and messy values.</span>
+              </div>
+              <div>
+                <Filter size={18} />
+                <strong>Smart filters</strong>
+                <span>Date range, category, and full-text search.</span>
+              </div>
+              <div>
+                <BarChart3 size={18} />
+                <strong>Interactive charts</strong>
+                <span>Trends, rankings, mix and custom metrics.</span>
+              </div>
+              <div>
+                <Download size={18} />
+                <strong>Export cleaned data</strong>
+                <span>CSV and Excel with normalized values.</span>
+              </div>
+            </div>
+            {error && (
+              <div className="error-box">
+                <AlertTriangle size={18} /> <span>{error}</span>
+              </div>
+            )}
           </section>
         ) : (
           <>
-            <section className="dashboard-title"><div><div className="eyebrow"><FileSpreadsheet size={14} /> {workbook.fileName}</div><h1>{primaryMetric ? `${primaryMetric.header} Performance Dashboard` : "Data Dashboard"}</h1></div></section>
-            {error && <div className="error-box"><AlertTriangle size={18} /> <span>{error}</span></div>}
+            <section className="dashboard-title">
+              <div>
+                <div className="eyebrow"><FileSpreadsheet size={14} /> {workbook.fileName}</div>
+                <h1>{primaryMetric ? `${primaryMetric.header} Performance Dashboard` : "Data Dashboard"}</h1>
+              </div>
+            </section>
+            {error && (
+              <div className="error-box">
+                <AlertTriangle size={18} /> <span>{error}</span>
+              </div>
+            )}
 
-            {workbook.sheets.length > 1 && <section className="sheet-tabs"><strong>Sheets</strong>{workbook.sheets.map((item, index) => <button key={item.name} className={index === sheetIndex ? "active" : ""} onClick={() => { setSheetIndex(index); resetFilters(); }}>{item.name}</button>)}</section>}
+            {workbook.sheets.length > 1 && (
+              <section className="sheet-tabs">
+                <strong>Sheets</strong>
+                {workbook.sheets.map((item, index) => (
+                  <button
+                    key={item.name}
+                    className={index === sheetIndex ? "active" : ""}
+                    onClick={() => { setSheetIndex(index); resetFilters(); }}
+                  >
+                    {item.name}
+                  </button>
+                ))}
+              </section>
+            )}
 
-            <section className="toolbar"><div className="toolbar-left"><button className={`btn ${showFilters ? "active" : "secondary"}`} onClick={() => setShowFilters((value) => !value)}><SlidersHorizontal size={16} /> Filters</button></div><div className="toolbar-right"><div className="search-box"><Search size={16} /><input type="text" placeholder="Search all columns…" value={search} onChange={(e) => setSearch(e.target.value)} /></div></div></section>
-
-            {showFilters && <section className="filter-panel"><div className="filter-panel-head"><div><strong>Dashboard controls</strong><span>Every filter is derived from the current worksheet.</span></div><button className="icon-btn" onClick={resetFilters} title="Reset all filters"><X size={16} /></button></div>
-              <div className="filter-grid">
-              {dateColumn && <><label className="filter-control"><span><CalendarDays size={14} /> From date</span><input type="date" value={fromDate} min={dateKey(dateBounds.min)} max={dateKey(dateBounds.max)} onChange={(e) => setFromDate(e.target.value)} /></label><label className="filter-control"><span><CalendarDays size={14} /> To date</span><input type="date" value={toDate} min={dateKey(dateBounds.min)} max={dateKey(dateBounds.max)} onChange={(e) => setToDate(e.target.value)} /></label></>
-              {filterableColumns.map((column) => <FilterSelect key={column.header} label={column.header} value={filters[column.header] || ""} options={uniqueOptions[column.header] || []} onChange={(value) => setFilters((prev) => ({ ...prev, [column.header]: value }))} />)}
-            </div>{dateColumn && <div className="quick-row"><span>Quick range:</span><button onClick={() => applyQuickRange("latest")}>Latest day</button><button onClick={() => applyQuickRange("month")}>This month</button><button onClick={() => applyQuickRange("previous-month")}>Previous month</button><button onClick={() => applyQuickRange("year")}>This year</button></div>}</section>}
-
-            <section className="status-strip"><div><Database size={16} /><strong>{formatFullNumber(sheet.rows.length)}</strong><span>Total rows</span></div><div><Columns3 size={16} /><strong>{formatFullNumber(sheet.columns.length)}</strong><span>Columns</span></div><div><Eye size={16} /><strong>{formatFullNumber(filteredRows.length)}</strong><span>Visible rows</span></div><div><Check size={16} /><strong>{filteredRows.length > 0 ? "Active" : "No data"}</strong><span>Filter status</span></div></section>
-
-            <section className="kpi-grid"><KPI icon={<BarChart3 size={18} />} label={`Total ${primaryMetric?.header || "Value"}`} value={formatFullNumber(stats.total)} detail="Exact filtered total" /><KPI icon={<BarChart3 size={18} />} label={`Average ${primaryMetric?.header || "Value"}`} value={formatFullNumber(stats.average)} detail={`Across ${formatFullNumber(stats.count)} records`} /><KPI icon={<BarChart3 size={18} />} label={`Min ${primaryMetric?.header || "Value"}`} value={formatFullNumber(stats.min)} detail="Lowest value" /><KPI icon={<BarChart3 size={18} />} label={`Max ${primaryMetric?.header || "Value"}`} value={formatFullNumber(stats.max)} detail="Highest value" /></section>
-
-            <section className="insight-card"><div className="insight-title"><Sparkles size={18} /><div><strong>Automatic business insights</strong><span>Rule-based analysis generated locally from the filtered data.</span></div></div><ul>{insights.map((insight, index) => <li key={index}>{insight}</li>)}</ul></section>
-
-            <section className="chart-controls"><strong>Dashboard sections</strong><div>{[["trend", "Daily trend"], ["monthly", "Monthly trend"], ["ranking", "Category ranking"], ["mix", "Category mix"]].map(([key, label]) => <button key={key} className={`chip ${charts[key] ? "active" : ""}`} onClick={() => toggleChart(key)}>{label}</button>)}</div></section>
-
-            <section className="chart-grid">
-              {charts.trend && <ChartCard wide title={`${primaryMetric?.header || "Value"} trend over time`} subtitle={dateColumn ? `Based on ${dateColumn.header}` : "A date field was not detected in this sheet."}>{trendData.length ? <ResponsiveContainer width="100%" height={320}><AreaChart data={trendData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="label" /><YAxis /><Tooltip formatter={(value) => formatFullNumber(value)} /><Area type="monotone" dataKey="value" stroke="#7546e8" fill="#f0eaff" /></AreaChart></ResponsiveContainer> : <Empty title="No trend data" text="A date column and metric are required." />}</ChartCard>}
-
-              {charts.monthly && <ChartCard title={`Monthly ${primaryMetric?.header || "value"}`} subtitle="Full values are available in the tooltip.">{monthlyData.length ? <ResponsiveContainer width="100%" height={300}><BarChart data={monthlyData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip formatter={(value) => formatFullNumber(value)} /><Bar dataKey="value" fill="#7546e8" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer> : <Empty title="No monthly data" text="A date column and metric are required." />}</ChartCard>}
-
-              {charts.ranking && <ChartCard wide title={`Top ${primaryDimension?.header || "categories"} by ${primaryMetric?.header || "value"}`} subtitle="Ranked from the currently filtered data.">{rankingData.length ? <ResponsiveContainer width="100%" height={320}><BarChart layout="vertical" data={rankingData}><CartesianGrid strokeDasharray="3 3" /><XAxis type="number" /><YAxis dataKey="name" type="category" width={120} /><Tooltip formatter={(value) => formatFullNumber(value)} /><Bar dataKey="value" fill="#a33bd6" /></BarChart></ResponsiveContainer> : <Empty title="No ranking data" text="A text column and metric are required." />}</ChartCard>}
-
-              {charts.mix && <ChartCard title={`${primaryMetric?.header || "Value"} mix by ${primaryDimension?.header || "category"}`} subtitle="Top categories shown individually.">{mixData.length ? <ResponsiveContainer width="100%" height={300}><PieChart><Pie data={mixData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={(entry) => `${entry.name} ${formatCompact(entry.value)}`}><Cell fill="#7546e8" /></Pie><Tooltip formatter={(value) => formatFullNumber(value)} /></PieChart></ResponsiveContainer> : <Empty title="No mix data" text="A text column and metric are required." />}</ChartCard>}
+            <section className="toolbar">
+              <div className="toolbar-left">
+                <button
+                  className={`btn ${showFilters ? "active" : "secondary"}`}
+                  onClick={() => setShowFilters((value) => !value)}
+                >
+                  <SlidersHorizontal size={16} /> Filters
+                </button>
+              </div>
+              <div className="toolbar-right">
+                <div className="search-box">
+                  <Search size={16} />
+                  <input
+                    type="text"
+                    placeholder="Search all columns…"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+              </div>
             </section>
 
-            <section className="data-section"><div className="data-head"><div><h2>Cleaned data preview</h2><p>Values are normalized to safe browser data types. The original workbook is not modified.</p></div><div><button className="btn primary" onClick={() => exportExcel(filteredRows, sheet.headers)}><FileDown size={16} /> Export Excel</button><button className="btn secondary" onClick={() => exportCSV(filteredRows, sheet.headers)}><FileDown size={16} /> Export CSV</button></div></div><div className="data-table"><table><thead><tr>{sheet.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{filteredRows.slice(0, PREVIEW_ROWS).map((row, index) => <tr key={index}>{sheet.headers.map((header) => <td key={header}>{formatCell(row[header])}</td>)}</tr>)}</tbody></table></div></section>
+            {showFilters && (
+              <section className="filter-panel">
+                <div className="filter-panel-head">
+                  <div>
+                    <strong>Dashboard controls</strong>
+                    <span>Every filter is derived from the current worksheet.</span>
+                  </div>
+                  <button className="icon-btn" onClick={resetFilters} title="Reset all filters">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="filter-grid">
+                  {dateColumn && (
+                    <>
+                      <label className="filter-control">
+                        <span><CalendarDays size={14} /> From date</span>
+                        <input
+                          type="date"
+                          value={fromDate}
+                          min={dateKey(dateBounds.min)}
+                          max={dateKey(dateBounds.max)}
+                          onChange={(e) => setFromDate(e.target.value)}
+                        />
+                      </label>
+                      <label className="filter-control">
+                        <span><CalendarDays size={14} /> To date</span>
+                        <input
+                          type="date"
+                          value={toDate}
+                          min={dateKey(dateBounds.min)}
+                          max={dateKey(dateBounds.max)}
+                          onChange={(e) => setToDate(e.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
+                  {filterableColumns.map((column) => (
+                    <FilterSelect
+                      key={column.header}
+                      label={column.header}
+                      value={filters[column.header] || ""}
+                      options={uniqueOptions[column.header] || []}
+                      onChange={(value) => setFilters((prev) => ({ ...prev, [column.header]: value }))}
+                    />
+                  ))}
+                </div>
+                {dateColumn && (
+                  <div className="quick-row">
+                    <span>Quick range:</span>
+                    <button onClick={() => applyQuickRange("latest")}>Latest day</button>
+                    <button onClick={() => applyQuickRange("month")}>This month</button>
+                    <button onClick={() => applyQuickRange("previous-month")}>Previous month</button>
+                    <button onClick={() => applyQuickRange("year")}>This year</button>
+                  </div>
+                )}
+              </section>
+            )}
 
-            <footer className="footer-note"><span>Browser-only processing · No external API · Exact values shown in cards, tables and tooltips</span><span>Detected header row: {sheet.headerRow} · Sheet {sheetIndex + 1} of {workbook.sheets.length}</span></footer>
+            <section className="status-strip">
+              <div>
+                <Database size={16} />
+                <strong>{formatFullNumber(sheet.rows.length)}</strong>
+                <span>Total rows</span>
+              </div>
+              <div>
+                <Columns3 size={16} />
+                <strong>{formatFullNumber(sheet.columns.length)}</strong>
+                <span>Columns</span>
+              </div>
+              <div>
+                <Eye size={16} />
+                <strong>{formatFullNumber(filteredRows.length)}</strong>
+                <span>Visible rows</span>
+              </div>
+              <div>
+                <Check size={16} />
+                <strong>{filteredRows.length > 0 ? "Active" : "No data"}</strong>
+                <span>Filter status</span>
+              </div>
+            </section>
+
+            <section className="kpi-grid">
+              <KPI
+                icon={<BarChart3 size={18} />}
+                label={`Total ${primaryMetric?.header || "Value"}`}
+                value={formatFullNumber(stats.total)}
+                detail="Exact filtered total"
+              />
+              <KPI
+                icon={<BarChart3 size={18} />}
+                label={`Average ${primaryMetric?.header || "Value"}`}
+                value={formatFullNumber(stats.average)}
+                detail={`Across ${formatFullNumber(stats.count)} records`}
+              />
+              <KPI
+                icon={<BarChart3 size={18} />}
+                label={`Min ${primaryMetric?.header || "Value"}`}
+                value={formatFullNumber(stats.min)}
+                detail="Lowest value"
+              />
+              <KPI
+                icon={<BarChart3 size={18} />}
+                label={`Max ${primaryMetric?.header || "Value"}`}
+                value={formatFullNumber(stats.max)}
+                detail="Highest value"
+              />
+            </section>
+
+            <section className="insight-card">
+              <div className="insight-title">
+                <Sparkles size={18} />
+                <div>
+                  <strong>Automatic business insights</strong>
+                  <span>Rule-based analysis generated locally from the filtered data.</span>
+                </div>
+              </div>
+              <ul>
+                {insights.map((insight, index) => (
+                  <li key={index}>{insight}</li>
+                ))}
+              </ul>
+            </section>
+
+            <section className="chart-controls">
+              <strong>Dashboard sections</strong>
+              <div>
+                {[
+                  ["trend", "Daily trend"],
+                  ["monthly", "Monthly trend"],
+                  ["ranking", "Category ranking"],
+                  ["mix", "Category mix"]
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    className={`chip ${charts[key] ? "active" : ""}`}
+                    onClick={() => toggleChart(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="chart-grid">
+              {charts.trend && (
+                <ChartCard
+                  wide
+                  title={`${primaryMetric?.header || "Value"} trend over time`}
+                  subtitle={dateColumn ? `Based on ${dateColumn.header}` : "A date field was not detected in this sheet."}
+                >
+                  {trendData.length ? (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <AreaChart data={trendData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="label" />
+                        <YAxis />
+                        <Tooltip formatter={(value) => formatFullNumber(value)} />
+                        <Area type="monotone" dataKey="value" stroke="#7546e8" fill="#f0eaff" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <Empty title="No trend data" text="A date column and metric are required." />
+                  )}
+                </ChartCard>
+              )}
+
+              {charts.monthly && (
+                <ChartCard
+                  title={`Monthly ${primaryMetric?.header || "value"}`}
+                  subtitle="Full values are available in the tooltip."
+                >
+                  {monthlyData.length ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <BarChart data={monthlyData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="month" />
+                        <YAxis />
+                        <Tooltip formatter={(value) => formatFullNumber(value)} />
+                        <Bar dataKey="value" fill="#7546e8" radius={[8, 8, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <Empty title="No monthly data" text="A date column and metric are required." />
+                  )}
+                </ChartCard>
+              )}
+
+              {charts.ranking && (
+                <ChartCard
+                  wide
+                  title={`Top ${primaryDimension?.header || "categories"} by ${primaryMetric?.header || "value"}`}
+                  subtitle="Ranked from the currently filtered data."
+                >
+                  {rankingData.length ? (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <BarChart layout="vertical" data={rankingData}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis type="number" />
+                        <YAxis dataKey="name" type="category" width={120} />
+                        <Tooltip formatter={(value) => formatFullNumber(value)} />
+                        <Bar dataKey="value" fill="#a33bd6" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <Empty title="No ranking data" text="A text column and metric are required." />
+                  )}
+                </ChartCard>
+              )}
+
+              {charts.mix && (
+                <ChartCard
+                  title={`${primaryMetric?.header || "Value"} mix by ${primaryDimension?.header || "category"}`}
+                  subtitle="Top categories shown individually."
+                >
+                  {mixData.length ? (
+                    <ResponsiveContainer width="100%" height={300}>
+                      <PieChart>
+                        <Pie
+                          data={mixData}
+                          dataKey="value"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={90}
+                          label={(entry) => `${entry.name} ${formatCompact(entry.value)}`}
+                        >
+                          <Cell fill="#7546e8" />
+                        </Pie>
+                        <Tooltip formatter={(value) => formatFullNumber(value)} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <Empty title="No mix data" text="A text column and metric are required." />
+                  )}
+                </ChartCard>
+              )}
+            </section>
+
+            <section className="data-section">
+              <div className="data-head">
+                <div>
+                  <h2>Cleaned data preview</h2>
+                  <p>Values are normalized to safe browser data types. The original workbook is not modified.</p>
+                </div>
+                <div>
+                  <button className="btn primary" onClick={() => exportExcel(filteredRows, sheet.headers)}>
+                    <FileDown size={16} /> Export Excel
+                  </button>
+                  <button className="btn secondary" onClick={() => exportCSV(filteredRows, sheet.headers)}>
+                    <FileDown size={16} /> Export CSV
+                  </button>
+                </div>
+              </div>
+              <div className="data-table">
+                <table>
+                  <thead>
+                    <tr>
+                      {sheet.headers.map((header) => (
+                        <th key={header}>{header}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRows.slice(0, PREVIEW_ROWS).map((row, index) => (
+                      <tr key={index}>
+                        {sheet.headers.map((header) => (
+                          <td key={header}>{formatCell(row[header])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <footer className="footer-note">
+              <span>Browser-only processing · No external API · Exact values shown in cards, tables and tooltips</span>
+              <span>Detected header row: {sheet.headerRow} · Sheet {sheetIndex + 1} of {workbook.sheets.length}</span>
+            </footer>
           </>
         )}
       </main>
 
-      <input ref={fileInputRef} className="hidden-input" type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" onChange={onFileChange} />
+      <input
+        ref={fileInputRef}
+        className="hidden-input"
+        type="file"
+        accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+        onChange={onFileChange}
+      />
     </div>
   );
 }
 
 class AppErrorBoundary extends React.Component {
   state = { hasError: false, message: "" };
-  static getDerivedStateFromError(error) { return { hasError: true, message: error?.message || "Unexpected dashboard error." }; }
-  componentDidCatch(error) { console.error("Dashboard render error:", error); }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, message: error?.message || "Unexpected dashboard error." };
+  }
+
+  componentDidCatch(error) {
+    console.error("Dashboard render error:", error);
+  }
+
   render() {
     if (!this.state.hasError) return this.props.children;
-    return <div className="fatal-error"><div className="fatal-card"><AlertTriangle size={28} /><h1>Dashboard could not display this workbook</h1><p>{this.state.message}</p><button className="btn primary" onClick={() => window.location.reload()}>Reload dashboard</button></div></div>;
+    return (
+      <div className="fatal-error">
+        <div className="fatal-card">
+          <AlertTriangle size={28} />
+          <h1>Dashboard could not display this workbook</h1>
+          <p>{this.state.message}</p>
+          <button className="btn primary" onClick={() => window.location.reload()}>
+            Reload dashboard
+          </button>
+        </div>
+      </div>
+    );
   }
 }
 
-createRoot(document.getElementById("root")).render(<AppErrorBoundary><App /></AppErrorBoundary>);
+createRoot(document.getElementById("root")).render(
+  <AppErrorBoundary>
+    <App />
+  </AppErrorBoundary>
+);
