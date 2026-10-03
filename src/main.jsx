@@ -41,6 +41,81 @@ function formatCompact(value) {
   return formatFullNumber(n);
 }
 
+
+function isQuantityColumn(column) {
+  if (!column) return false;
+  const h = text(column.header).toLowerCase();
+  return /\b(quantity|qty|qnty|units?|tonnes?|tons?|mt|metric ton|kilograms?|kgs?|kg)\b/.test(h);
+}
+
+function isMoneyColumn(column) {
+  if (!column) return false;
+  const h = text(column.header).toLowerCase();
+  if (/\b(id|code|no|number|phone|mobile|zip|pin)\b/.test(h)) return false;
+  return /\b(amount|amt|sales?|revenue|income|expense|cost|profit|value|price|rate|budget|target|margin|turnover|value)\b/.test(h)
+    || h.includes("₹") || h.includes("rs") || h.includes("inr");
+}
+
+function quantityToMT(value, column) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const h = text(column?.header).toLowerCase();
+  if (/\b(kilograms?|kgs?|kg)\b/.test(h)) return n / 1000;
+  return n;
+}
+
+function formatIndianCurrency(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  return `₹${new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n)}`;
+}
+
+function formatMetricValue(value, column) {
+  if (isQuantityColumn(column)) {
+    const mt = quantityToMT(value, column);
+    return mt === null ? "—" : `${new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 3 }).format(mt)} MT`;
+  }
+  if (isMoneyColumn(column)) return formatIndianCurrency(value);
+  return formatFullNumber(value);
+}
+
+function formatMetricAxis(value, column) {
+  if (isQuantityColumn(column)) {
+    const mt = quantityToMT(value, column);
+    return mt === null ? "—" : `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(mt)} MT`;
+  }
+  if (isMoneyColumn(column)) return formatIndianCurrency(value);
+  return formatFullNumber(value);
+}
+
+function findLocationColumn(columns) {
+  const list = columns || [];
+  return list.find((column) => {
+    const h = text(column.header).toLowerCase();
+    return /^(state|states|state name|province|region)$/.test(h) || h.includes("state");
+  }) || list.find((column) => {
+    const h = text(column.header).toLowerCase();
+    return /^(location|place|city|district|address)$/.test(h);
+  }) || null;
+}
+
+function DetailedTooltip({ active, payload, label, columns }) {
+  if (!active || !payload?.length) return null;
+  const entry = payload.find((item) => item?.payload);
+  const data = entry?.payload;
+  const records = Array.isArray(data?.records) ? data.records : [];
+  return <div style={{ maxWidth: 430, maxHeight: 320, overflow: "auto", padding: 10, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, boxShadow: "var(--shadow-sm)", color: "var(--text)", fontSize: 12 }}>
+    <strong style={{ display: "block", marginBottom: 6 }}>{label || data?.name || data?.date || data?.month || "Details"}</strong>
+    {data?.value !== undefined && <div style={{ marginBottom: 8, fontWeight: 700 }}>{formatMetricValue(data.value, entry?.payload?.metricColumn || null)}</div>}
+    {records.length ? <div style={{ display: "grid", gap: 8 }}>{records.map((row, rowIndex) => <div key={`${row.__row || rowIndex}-${rowIndex}`} style={{ padding: 7, borderTop: "1px solid var(--border)" }}>
+      {(columns || []).filter((column) => safeText(row[column.header]) !== "").map((column) => <div key={column.header} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+        <span style={{ color: "var(--muted)" }}>{column.header}</span>
+        <strong style={{ textAlign: "right", fontWeight: 600 }}>{column.isNumeric ? formatMetricValue(row[column.header], column) : formatCell(row[column.header], column)}</strong>
+      </div>)}
+    </div>)}</div> : <span style={{ color: "var(--muted)" }}>No row-level details available for this point.</span>}
+  </div>;
+}
+
 function dateKey(value) {
   const date = value instanceof Date ? value : parseDate(value);
   if (!date) return "";
@@ -48,8 +123,9 @@ function dateKey(value) {
 }
 
 
-function formatCell(value) {
+function formatCell(value, column = null) {
   if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "number" && column?.isNumeric) return formatMetricValue(value, column);
   if (typeof value === "number") return formatFullNumber(value);
   return safeText(value) || "—";
 }
@@ -61,10 +137,13 @@ function aggregateCategory(rows, dimension, metric) {
     const key = safeText(row[dimension.header]) || "Blank";
     const value = Number(row[metric.header]);
     if (!Number.isFinite(value)) continue;
-    map.set(key, (map.get(key) || 0) + value);
+    const current = map.get(key) || { value: 0, records: [] };
+    current.value += value;
+    current.records.push(row);
+    map.set(key, current);
   }
   return [...map.entries()]
-    .map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }))
+    .map(([name, item]) => ({ name, value: Math.round(item.value * 100) / 100, records: item.records, metricColumn: metric }))
     .sort((a, b) => b.value - a.value);
 }
 
@@ -92,11 +171,16 @@ function aggregateMonthly(rows, dateColumn, metric) {
     const value = Number(row[metric.header]);
     if (!date || !Number.isFinite(value)) continue;
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    map.set(key, (map.get(key) || 0) + value);
+    const current = map.get(key) || { value: 0, records: [] };
+    current.value += value;
+    current.records.push(row);
+    map.set(key, current);
   }
-  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => ({
+  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => ({
     month: new Intl.DateTimeFormat("en-IN", { month: "short", year: "numeric" }).format(new Date(`${key}-01T00:00:00`)),
-    value: Math.round(value * 100) / 100
+    value: Math.round(item.value * 100) / 100,
+    records: item.records,
+    metricColumn: metric
   }));
 }
 
@@ -648,6 +732,7 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
   const [geoJson, setGeoJson] = useState(null);
   const [mapError, setMapError] = useState("");
   const [hovered, setHovered] = useState(null);
+  const stateColumn = useMemo(() => findLocationColumn(columns || []), [columns]);
 
   useEffect(() => {
     let cancelled = false;
@@ -666,27 +751,56 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
   const stateCounts = useMemo(() => {
     const counts = new Map();
     for (const row of mapRows || []) {
-      for (const value of Object.values(row || {})) {
-        const state = normalizePlaceName(value);
-        if (state) counts.set(state, (counts.get(state) || 0) + 1);
+      const seen = new Set();
+      if (stateColumn) {
+        const normalized = normalizePlaceName(row[stateColumn.header]);
+        if (normalized) seen.add(normalized);
+      } else {
+        for (const value of Object.values(row || {})) {
+          const normalized = normalizePlaceName(value);
+          if (normalized) seen.add(normalized);
+        }
       }
+      for (const stateName of seen) counts.set(stateName, (counts.get(stateName) || 0) + 1);
     }
     return counts;
-  }, [mapRows]);
+  }, [mapRows, stateColumn]);
 
-  const stateMetricTotals = useMemo(() => {
+  const quantityMetric = useMemo(() => (columns || []).find(isQuantityColumn) || null, [columns]);
+  const amountMetric = useMemo(() => (columns || []).find(isMoneyColumn) || null, [columns]);
+
+  const stateTotals = useMemo(() => {
     const totals = new Map();
-    if (!mapMetric) return totals;
     for (const row of mapRows || []) {
-      for (const value of Object.values(row || {})) {
-        const stateName = normalizePlaceName(value);
-        if (!stateName) continue;
-        const amount = Number(row[mapMetric.header]);
-        if (Number.isFinite(amount)) totals.set(stateName, (totals.get(stateName) || 0) + amount);
+      const seen = new Set();
+      if (stateColumn) {
+        const normalized = normalizePlaceName(row[stateColumn.header]);
+        if (normalized) seen.add(normalized);
+      } else {
+        for (const value of Object.values(row || {})) {
+          const normalized = normalizePlaceName(value);
+          if (normalized) seen.add(normalized);
+        }
+      }
+      for (const stateName of seen) {
+        const current = totals.get(stateName) || { quantity: 0, amount: 0, metric: 0 };
+        if (quantityMetric) {
+          const q = quantityToMT(row[quantityMetric.header], quantityMetric);
+          if (q !== null) current.quantity += q;
+        }
+        if (amountMetric) {
+          const a = Number(row[amountMetric.header]);
+          if (Number.isFinite(a)) current.amount += a;
+        }
+        if (mapMetric) {
+          const m = Number(row[mapMetric.header]);
+          if (Number.isFinite(m)) current.metric += m;
+        }
+        totals.set(stateName, current);
       }
     }
     return totals;
-  }, [mapRows, mapMetric]);
+  }, [mapRows, stateColumn, quantityMetric, amountMetric, mapMetric]);
 
   const features = useMemo(() => Array.isArray(geoJson?.features) ? geoJson.features : [], [geoJson]);
   const bounds = useMemo(() => geometryBounds(features), [features]);
@@ -719,7 +833,7 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
 
   const width = 760, height = 520;
 
-  return <ChartCard wide title={title} subtitle={`Detected ${matchedStates.length} place${matchedStates.length === 1 ? "" : "s"} in the filtered data. Hover a state to see its filtered records${mapMetric ? ` and ${mapMetric.header} total` : ""}.`}>
+  return <ChartCard wide title={title} subtitle={`Detected ${matchedStates.length} place${matchedStates.length === 1 ? "" : "s"} in the filtered data. Hover a state for records, Quantity in MT and Amount in ₹.`}>
     <VisualControls rows={rows} columns={columns} state={state} setState={setState} showMetric showDimension={false} showFilter label="Map filters" />
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 190px", gap: 18, height: "100%", minHeight: 0, overflow: "hidden" }}>
       <div style={{ position: "relative", minWidth: 0 }}>
@@ -731,7 +845,7 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
             return <path key={`${name}-${index}`} d={featurePath(feature, bounds, width, height)} fill={colorForState(name, count)} stroke="var(--border-strong)" strokeWidth={active ? 1.15 : 0.75} vectorEffect="non-scaling-stroke" style={{ cursor: active ? "pointer" : "default", transition: "fill .18s ease, opacity .18s ease" }} opacity={hovered && hovered !== name ? 0.55 : 1} onMouseEnter={() => setHovered(name)} onMouseLeave={() => setHovered(null)} />;
           })}
         </svg>
-        {hovered && <div style={{ position: "absolute", left: 14, bottom: 14, padding: "8px 11px", borderRadius: 10, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", fontSize: 12 }}><strong>{hovered}</strong><span style={{ display: "block", color: "var(--muted)", marginTop: 2 }}>{formatFullNumber(stateCounts.get(hovered) || 0)} matching record{(stateCounts.get(hovered) || 0) === 1 ? "" : "s"}{mapMetric && <><br />{mapMetric.header}: {formatFullNumber(stateMetricTotals.get(hovered) || 0)}</>}</span></div>}
+        {hovered && <div style={{ position: "absolute", left: 14, bottom: 14, maxWidth: 300, padding: "9px 12px", borderRadius: 10, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", fontSize: 12 }}><strong>{hovered}</strong><span style={{ display: "block", color: "var(--muted)", marginTop: 4 }}>{formatFullNumber(stateCounts.get(hovered) || 0)} matching record{(stateCounts.get(hovered) || 0) === 1 ? "" : "s"}<br />Quantity: {formatMetricValue(stateTotals.get(hovered)?.quantity || 0, quantityMetric)}<br />Amount: {formatIndianCurrency(stateTotals.get(hovered)?.amount || 0)}{mapMetric && mapMetric.header !== quantityMetric?.header && mapMetric.header !== amountMetric?.header && <><br />{mapMetric.header}: {formatMetricValue(stateTotals.get(hovered)?.metric || 0, mapMetric)}</>}</span></div>}
       </div>
       <div style={{ borderLeft: "1px solid var(--border)", paddingLeft: 16, overflowY: "auto" }}>
         <strong style={{ display: "block", marginBottom: 10 }}>Detected places</strong>
@@ -838,8 +952,8 @@ function App() {
   const stats = useMemo(() => getStats(kpiRows, kpiMetric), [kpiRows, kpiMetric]);
   const trendData = useMemo(() => aggregateTrend(trendRows, dateColumn, trendMetric), [trendRows, dateColumn, trendMetric]);
   const monthlyData = useMemo(() => aggregateMonthly(monthlyRows, dateColumn, monthlyMetric), [monthlyRows, dateColumn, monthlyMetric]);
-  const rankingData = useMemo(() => aggregateCategory(rankingRows, rankingDimension, rankingMetric).slice(0, 12), [rankingRows, rankingDimension, rankingMetric]);
-  const mixData = useMemo(() => aggregateCategory(mixRows, mixDimension, mixMetric).slice(0, 8), [mixRows, mixDimension, mixMetric]);
+  const rankingData = useMemo(() => aggregateCategory(rankingRows, rankingDimension, rankingMetric), [rankingRows, rankingDimension, rankingMetric]);
+  const mixData = useMemo(() => aggregateCategory(mixRows, mixDimension, mixMetric), [mixRows, mixDimension, mixMetric]);
   const insights = useMemo(() => generateInsights(filteredRows, sheet?.columns || [], primaryMetric, primaryDimension, dateColumn), [filteredRows, sheet, primaryMetric, primaryDimension, dateColumn]);
 
   function resetFilters() {
@@ -992,7 +1106,7 @@ function App() {
             <section className="status-strip"><div><Database size={16} /><strong>{formatFullNumber(sheet.rows.length)}</strong><span>Total rows</span></div><div><Columns3 size={16} /><strong>{formatFullNumber(sheet.columns.length)}</strong><span>Columns detected</span></div><div><CalendarDays size={16} /><strong>{dateColumn ? "Detected" : "None"}</strong><span>Date field</span></div><div><BarChart3 size={16} /><strong>{primaryMetric?.header || "None"}</strong><span>Primary metric</span></div></section>
 
             <section className="chart-card" style={{ marginBottom: 14 }}><div className="chart-head"><h3>KPI validation & filters</h3><p>Choose the metric and an optional filter. Totals, averages and highest values are recalculated from the selected records only.</p></div><div style={{ padding: "0 16px 4px" }}><VisualControls rows={filteredRows} columns={sheet.columns} state={kpiControls} setState={setKpiControls} showMetric showDimension={false} showFilter label="KPI filters" /></div></section>
-            <section className="kpi-grid"><KPI icon={<BarChart3 size={18} />} label={`Total ${kpiMetric?.header || "Value"}`} value={formatFullNumber(stats.total)} detail={`Exact total · ${formatFullNumber(stats.count)} populated values`} /><KPI icon={<Database size={18} />} label="Records included" value={formatFullNumber(kpiRows.length)} detail={`of ${formatFullNumber(filteredRows.length)} globally filtered rows`} /><KPI icon={<Sparkles size={18} />} label={`Average ${kpiMetric?.header || "Value"}`} value={formatFullNumber(stats.average)} detail="Validated populated-value average" /><KPI icon={<Eye size={18} />} label={`Highest ${kpiMetric?.header || "Value"}`} value={formatFullNumber(stats.max)} detail="Highest validated populated value" /></section>
+            <section className="kpi-grid"><KPI icon={<BarChart3 size={18} />} label={`Total ${kpiMetric?.header || "Value"}`} value={formatMetricValue(stats.total, kpiMetric)} detail={`Exact total · ${formatFullNumber(stats.count)} populated values`} /><KPI icon={<Database size={18} />} label="Records included" value={formatFullNumber(kpiRows.length)} detail={`of ${formatFullNumber(filteredRows.length)} globally filtered rows`} /><KPI icon={<Sparkles size={18} />} label={`Average ${kpiMetric?.header || "Value"}`} value={formatMetricValue(stats.average, kpiMetric)} detail="Validated populated-value average" /><KPI icon={<Eye size={18} />} label={`Highest ${kpiMetric?.header || "Value"}`} value={formatMetricValue(stats.max, kpiMetric)} detail="Highest validated populated value" /></section>
 
             <section className="insight-card"><div className="insight-title"><Sparkles size={18} /><div><strong>Automatic business insights</strong><span>Rule-based analysis generated locally from the current filtered data.</span></div></div>{insights.length ? <div className="insight-list">{insights.map((item) => <div key={item}><Check size={15} /> <span>{item}</span></div>)}</div> : <div className="muted">Not enough structured data to generate insights yet.</div>}</section>
 
@@ -1001,28 +1115,28 @@ function App() {
             <section className="chart-grid">
               {charts.trend && <ChartCard wide title={`${trendMetric?.header || "Value"} trend over time`} subtitle={dateColumn ? `Based on ${dateColumn.header} and the selected filters.` : `No date column was detected. Showing ${trendMetric?.header || "value"} by ${trendDimension?.header || "record"} instead.`}>
                 <VisualControls rows={filteredRows} columns={sheet.columns} state={trendControls} setState={setTrendControls} showMetric showDimension={!dateColumn} showFilter label="Trend filters" />
-                {dateColumn && trendData.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={trendData} margin={{ top: 15, right: 20, left: 15, bottom: 10 }}><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0.03} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" /><XAxis dataKey="label" tick={{ fill: "var(--muted)", fontSize: 12 }} /><YAxis tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} width={70} /><Tooltip formatter={(value) => [formatFullNumber(value), trendMetric?.header || "Value"]} /><Area type="monotone" dataKey="value" stroke="var(--accent)" fill="url(#trendFill)" strokeWidth={3} /></AreaChart></ResponsiveContainer> : !dateColumn && aggregateCategory(trendRows, trendDimension, trendMetric).length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={aggregateCategory(trendRows, trendDimension, trendMetric).slice(0, 20)} margin={{ top: 15, right: 20, left: 20, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" /><XAxis dataKey="name" tick={{ fill: "var(--muted)", fontSize: 11 }} interval={0} angle={-20} textAnchor="end" height={65} /><YAxis tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} width={70} /><Tooltip formatter={(value) => [formatFullNumber(value), trendMetric?.header || "Value"]} /><Bar dataKey="value" fill="var(--accent)" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer> : <Empty title="No valid data for this view" text="Choose another metric, group or filter." />}
+                {dateColumn && trendData.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={trendData} margin={{ top: 15, right: 20, left: 15, bottom: 10 }}><defs><linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity={0.35} /><stop offset="100%" stopColor="var(--accent)" stopOpacity={0.03} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" /><XAxis dataKey="label" tick={{ fill: "var(--muted)", fontSize: 12 }} /><YAxis tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={(value) => formatMetricAxis(value, trendMetric)} width={95} /><Tooltip content={<DetailedTooltip columns={sheet.columns} />} /><Area type="monotone" dataKey="value" stroke="var(--accent)" fill="url(#trendFill)" strokeWidth={3} /></AreaChart></ResponsiveContainer> : !dateColumn && aggregateCategory(trendRows, trendDimension, trendMetric).length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={aggregateCategory(trendRows, trendDimension, trendMetric)} margin={{ top: 15, right: 20, left: 20, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" /><XAxis dataKey="name" tick={{ fill: "var(--muted)", fontSize: 11 }} interval={0} angle={-20} textAnchor="end" height={65} /><YAxis tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={(value) => formatMetricAxis(value, monthlyMetric)} width={95} /><Tooltip content={<DetailedTooltip columns={sheet.columns} />} /><Bar dataKey="value" fill="var(--accent)" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer> : <Empty title="No valid data for this view" text="Choose another metric, group or filter." />}
               </ChartCard>}
 
               {charts.monthly && <ChartCard title={`${monthlyData.length ? "Monthly" : "Category"} ${monthlyMetric?.header || "value"}`} subtitle={dateColumn ? "Full values are available in the tooltip and respond to the filters above." : `No date field was detected. Showing ${monthlyMetric?.header || "value"} by ${monthlyDimension?.header || "category"}.`}>
                 <VisualControls rows={filteredRows} columns={sheet.columns} state={monthlyControls} setState={setMonthlyControls} showMetric showDimension={!dateColumn} showFilter label="Monthly filters" />
-                {dateColumn && monthlyData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyData} margin={{ top: 15, right: 20, left: 10, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" /><XAxis dataKey="month" tick={{ fill: "var(--muted)", fontSize: 12 }} /><YAxis tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} width={70} /><Tooltip formatter={(value) => [formatFullNumber(value), monthlyMetric?.header || "Value"]} /><Bar dataKey="value" fill="var(--accent)" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer> : !dateColumn ? <ResponsiveContainer width="100%" height="100%"><BarChart data={aggregateCategory(monthlyRows, monthlyDimension, monthlyMetric).slice(0, 12)} layout="vertical" margin={{ top: 10, right: 25, left: 30, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" horizontal={false} /><XAxis type="number" tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} /><YAxis type="category" dataKey="name" width={130} tick={{ fill: "var(--text)", fontSize: 11 }} /><Tooltip formatter={(value) => [formatFullNumber(value), monthlyMetric?.header || "Value"]} /><Bar dataKey="value" fill="var(--accent-2)" radius={[0, 8, 8, 0]} /></BarChart></ResponsiveContainer> : <Empty title="No valid monthly data" text="Choose another metric or filter." />}
+                {dateColumn && monthlyData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyData} margin={{ top: 15, right: 20, left: 10, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" /><XAxis dataKey="month" tick={{ fill: "var(--muted)", fontSize: 12 }} /><YAxis tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={(value) => formatMetricAxis(value, rankingMetric)} width={95} /><Tooltip content={<DetailedTooltip columns={sheet.columns} />} /><Bar dataKey="value" fill="var(--accent)" radius={[8, 8, 0, 0]} /></BarChart></ResponsiveContainer> : !dateColumn ? <ResponsiveContainer width="100%" height="100%"><BarChart data={aggregateCategory(monthlyRows, monthlyDimension, monthlyMetric)} layout="vertical" margin={{ top: 10, right: 25, left: 30, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" horizontal={false} /><XAxis type="number" tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} /><YAxis type="category" dataKey="name" width={130} tick={{ fill: "var(--text)", fontSize: 11 }} /><Tooltip content={<DetailedTooltip columns={sheet.columns} />} /><Bar dataKey="value" fill="var(--accent-2)" radius={[0, 8, 8, 0]} /></BarChart></ResponsiveContainer> : <Empty title="No valid monthly data" text="Choose another metric or filter." />}
               </ChartCard>}
 
               {charts.ranking && <ChartCard wide title={`Top ${rankingDimension?.header || "categories"} by ${rankingMetric?.header || "value"}`} subtitle="Ranked from the currently filtered data. Use the controls to change the metric, grouping and filter.">
                 <VisualControls rows={filteredRows} columns={sheet.columns} state={rankingControls} setState={setRankingControls} showMetric showDimension showFilter label="Ranking filters" />
-                {rankingData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={rankingData} layout="vertical" margin={{ top: 10, right: 25, left: 30, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" horizontal={false} /><XAxis type="number" tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} /><YAxis type="category" dataKey="name" width={140} tick={{ fill: "var(--text)", fontSize: 12 }} /><Tooltip formatter={(value) => [formatFullNumber(value), rankingMetric?.header || "Value"]} /><Bar dataKey="value" fill="var(--accent-2)" radius={[0, 8, 8, 0]} /></BarChart></ResponsiveContainer> : <Empty title="Category ranking not available" text="Choose a valid metric, group and filter." />}
+                {rankingData.length ? <ResponsiveContainer width="100%" height="100%"><BarChart data={rankingData} layout="vertical" margin={{ top: 10, right: 25, left: 30, bottom: 10 }}><CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" horizontal={false} /><XAxis type="number" tick={{ fill: "var(--muted)", fontSize: 12 }} tickFormatter={formatCompact} /><YAxis type="category" dataKey="name" width={140} tick={{ fill: "var(--text)", fontSize: 12 }} /><Tooltip content={<DetailedTooltip columns={sheet.columns} />} /><Bar dataKey="value" fill="var(--accent-2)" radius={[0, 8, 8, 0]} /></BarChart></ResponsiveContainer> : <Empty title="Category ranking not available" text="Choose a valid metric, group and filter." />}
               </ChartCard>}
 
               {charts.mix && <ChartCard title={`${mixMetric?.header || "Value"} mix by ${mixDimension?.header || "category"}`} subtitle="Choose the metric, grouping and optional filter. Exact values are available in the tooltip.">
                 <VisualControls rows={filteredRows} columns={sheet.columns} state={mixControls} setState={setMixControls} showMetric showDimension showFilter label="Mix filters" />
-                {mixData.length ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={mixData} dataKey="value" nameKey="name" cx="50%" cy="48%" outerRadius="72%" innerRadius="42%" paddingAngle={2}>{mixData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={`hsl(${(index * 43) % 360} 70% 55%)`} />)}</Pie><Tooltip formatter={(value) => [formatFullNumber(value), mixMetric?.header || "Value"]} /><Legend /></PieChart></ResponsiveContainer> : <Empty title="Category mix not available" text="Choose a valid metric, group and filter." />}
+                {mixData.length ? <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={mixData} dataKey="value" nameKey="name" cx="50%" cy="48%" outerRadius="72%" innerRadius="42%" paddingAngle={2}>{mixData.map((entry, index) => <Cell key={`${entry.name}-${index}`} fill={`hsl(${(index * 43) % 360} 70% 55%)`} />)}</Pie><Tooltip content={<DetailedTooltip columns={sheet.columns} />} /><Legend /></PieChart></ResponsiveContainer> : <Empty title="Category mix not available" text="Choose a valid metric, group and filter." />}
               </ChartCard>}
             </section>
 
             {charts.map && <MapCard rows={filteredRows} columns={sheet.columns} metric={primaryMetric} state={mapControls} setState={setMapControls} title={`Location map${primaryDimension?.header ? ` — ${primaryDimension.header}` : ""}`} />}
 
-            <section className="data-section"><div className="data-head"><div><h2>Cleaned data preview</h2><p>Values are normalized to safe browser data types. The original workbook is not modified.</p></div><button className="btn secondary" onClick={() => setShowData((value) => !value)}>{showData ? "Hide data" : "Show data"}</button></div>{showData && <div className="table-wrap">{filteredRows.length ? <table><thead><tr>{sheet.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{filteredRows.map((row, index) => <tr key={`${row.__row}-${index}`}>{sheet.headers.map((header) => <td key={header}>{formatCell(row[header])}</td>)}</tr>)}</tbody></table> : <Empty title="No rows match these filters" text="Clear or adjust the filters to see data." />}</div>}</section>
+            <section className="data-section"><div className="data-head"><div><h2>Cleaned data preview</h2><p>Values are normalized to safe browser data types. The original workbook is not modified.</p></div><button className="btn secondary" onClick={() => setShowData((value) => !value)}>{showData ? "Hide data" : "Show data"}</button></div>{showData && <div className="table-wrap">{filteredRows.length ? <table><thead><tr>{sheet.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{filteredRows.map((row, index) => <tr key={`${row.__row}-${index}`}>{sheet.headers.map((header) => <td key={header}>{formatCell(row[header], sheet.columns.find((column) => column.header === header))}</td>)}</tr>)}</tbody></table> : <Empty title="No rows match these filters" text="Clear or adjust the filters to see data." />}</div>}</section>
 
             <footer className="footer-note"><span>Browser-only processing · No external API · Exact values shown in cards, tables and tooltips</span><span>Detected header row: {sheet.headerRow} · Source rows: {formatFullNumber(sheet.sourceRows)}</span></footer>
           </>
