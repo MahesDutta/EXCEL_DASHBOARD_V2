@@ -52,22 +52,51 @@ function isMoneyColumn(column) {
   if (!column) return false;
   const h = text(column.header).toLowerCase();
   if (/\b(id|code|no|number|phone|mobile|zip|pin)\b/.test(h)) return false;
-  return /\b(amount|amt|sales?|revenue|income|expense|cost|profit|value|price|rate|budget|target|margin|turnover|value)\b/.test(h)
+  return /\b(amount|amt|sales amount|sales value|sales|revenue|income|expense|cost|profit|value|price|rate|budget|target|margin|turnover)\b/.test(h)
     || h.includes("₹") || h.includes("rs") || h.includes("inr");
 }
 
 function quantityToMT(value, column) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return null;
+  const n = parseNumber(value);
+  if (n === null) return null;
   const h = text(column?.header).toLowerCase();
   if (/\b(kilograms?|kgs?|kg)\b/.test(h)) return n / 1000;
   return n;
 }
 
 function formatIndianCurrency(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "—";
+  const n = parseNumber(value);
+  if (n === null) return "—";
   return `₹${new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(n)}`;
+}
+
+function formatMetricValue(value, column) {
+  if (isQuantityColumn(column)) {
+    const mt = quantityToMT(value, column);
+    return mt === null ? "—" : `${new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 3 }).format(mt)} MT`;
+  }
+  if (isMoneyColumn(column)) return formatIndianCurrency(value);
+  return formatFullNumber(value);
+}
+
+function formatMetricAxis(value, column) {
+  if (isQuantityColumn(column)) {
+    const mt = quantityToMT(value, column);
+    return mt === null ? "—" : `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(mt)} MT`;
+  }
+  if (isMoneyColumn(column)) return formatIndianCurrency(value);
+  return formatFullNumber(value);
+}
+
+function findPreferredMetric(columns, kind) {
+  const numeric = (columns || []).filter((column) => column.isNumeric);
+  if (kind === "quantity") {
+    return numeric.find((column) => /\b(quantity|qty|qnty|tonnes?|tons?|mt|metric ton|kilograms?|kgs?|kg)\b/i.test(column.header)) || null;
+  }
+  if (kind === "amount") {
+    return numeric.find((column) => /\b(sales amount|sales value|sales|revenue|turnover|amount|amt)\b/i.test(column.header)) || numeric.find(isMoneyColumn) || null;
+  }
+  return null;
 }
 
 function formatMetricValue(value, column) {
@@ -90,13 +119,10 @@ function formatMetricAxis(value, column) {
 
 function findLocationColumn(columns) {
   const list = columns || [];
-  return list.find((column) => {
-    const h = text(column.header).toLowerCase();
-    return /^(state|states|state name|province|region)$/.test(h) || h.includes("state");
-  }) || list.find((column) => {
-    const h = text(column.header).toLowerCase();
-    return /^(location|place|city|district|address)$/.test(h);
-  }) || null;
+  return list.find((column) => /^(state|states|state name|province)$/i.test(text(column.header).trim()))
+    || list.find((column) => /\bstate\b/i.test(text(column.header)))
+    || list.find((column) => /^(location|place|city|district)$/i.test(text(column.header).trim()))
+    || null;
 }
 
 function DetailedTooltip({ active, payload, label, columns }) {
@@ -133,9 +159,12 @@ function formatCell(value, column = null) {
 function aggregateCategory(rows, dimension, metric) {
   if (!dimension || !metric) return [];
   const map = new Map();
+  const displayNames = new Map();
   for (const row of rows) {
-    const key = safeText(row[dimension.header]) || "Blank";
-    const value = Number(row[metric.header]);
+    const rawKey = safeText(row[dimension.header]);
+    const key = normalizeValueKey(rawKey) || "(blank / missing)";
+    if (rawKey && !displayNames.has(key)) displayNames.set(key, rawKey);
+    const value = parseNumber(row[metric.header]);
     if (!Number.isFinite(value)) continue;
     const current = map.get(key) || { value: 0, records: [] };
     current.value += value;
@@ -143,7 +172,7 @@ function aggregateCategory(rows, dimension, metric) {
     map.set(key, current);
   }
   return [...map.entries()]
-    .map(([name, item]) => ({ name, value: Math.round(item.value * 100) / 100, records: item.records, metricColumn: metric }))
+    .map(([key, item]) => ({ name: displayNames.get(key) || key, value: Math.round(item.value * 100) / 100, records: item.records, metricColumn: metric }))
     .sort((a, b) => b.value - a.value);
 }
 
@@ -152,14 +181,19 @@ function aggregateTrend(rows, dateColumn, metric) {
   const map = new Map();
   for (const row of rows) {
     const key = dateKey(row[dateColumn.header]);
-    const value = Number(row[metric.header]);
-    if (!key || !Number.isFinite(value)) continue;
-    map.set(key, (map.get(key) || 0) + value);
+    const value = parseNumber(row[metric.header]);
+    if (!key || value === null) continue;
+    const current = map.get(key) || { value: 0, records: [] };
+    current.value += value;
+    current.records.push(row);
+    map.set(key, current);
   }
-  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, value]) => ({
+  return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => ({
     date: key,
     label: new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short" }).format(parseDate(key)),
-    value: Math.round(value * 100) / 100
+    value: Math.round(item.value * 100) / 100,
+    records: item.records,
+    metricColumn: metric
   }));
 }
 
@@ -168,7 +202,7 @@ function aggregateMonthly(rows, dateColumn, metric) {
   const map = new Map();
   for (const row of rows) {
     const date = parseDate(row[dateColumn.header]);
-    const value = Number(row[metric.header]);
+    const value = parseNumber(row[metric.header]);
     if (!date || !Number.isFinite(value)) continue;
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
     const current = map.get(key) || { value: 0, records: [] };
@@ -191,7 +225,7 @@ function getStats(rows, metric) {
   let min = Infinity;
   let max = -Infinity;
   for (const row of rows) {
-    const value = Number(row[metric.header]);
+    const value = parseNumber(row[metric.header]);
     if (!Number.isFinite(value)) continue;
     total += value;
     count += 1;
@@ -246,6 +280,22 @@ function text(value) {
     try { return JSON.stringify(value); } catch { return String(value); }
   }
   return String(value).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeValueKey(value) {
+  // Treat harmless presentation differences as the same logical value.
+  // Examples: "West Bengal" = "WEST BENGAL", "S k enterprises" = "S K Enterprises".
+  const raw = text(value);
+  if (!raw) return "";
+  return raw.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-IN");
+}
+
+function canonicalDisplayValue(map, value) {
+  const raw = text(value);
+  if (!raw) return "";
+  const key = normalizeValueKey(raw);
+  if (!map.has(key)) map.set(key, raw);
+  return map.get(key);
 }
 
 function isoDate(date) {
@@ -368,7 +418,7 @@ function detectColumns(rows, headers) {
     for (let i = 0; i < rows.length; i += 1) {
       const value = rows[i][index];
       values[i] = value;
-      const normalized = text(value);
+      const normalized = normalizeValueKey(value);
       if (normalized) uniqueSet.add(normalized);
     }
     const type = inferType(values, header);
@@ -454,7 +504,7 @@ function cleanSheet(sheet, name) {
 function chooseMetric(columns) {
   const numeric = columns.filter((column) => column.isNumeric);
   if (!numeric.length) return null;
-  return numeric.find((column) => column.measureHint) || numeric[0];
+  return findPreferredMetric(columns, "quantity") || findPreferredMetric(columns, "amount") || numeric.find((column) => column.measureHint) || numeric[0];
 }
 
 function chooseSecondaryMetric(columns, primary) {
@@ -567,26 +617,26 @@ function FilterSelect({ label, value, options, onChange }) {
 
 function getColumnOptions(rows, column) {
   if (!column) return [];
-  const values = new Set();
+  const values = new Map();
   for (const row of rows || []) {
     const value = safeText(row[column.header]);
-    if (value) values.add(value);
-    if (values.size >= 100) break;
+    if (value) canonicalDisplayValue(values, value);
   }
-  return [...values].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).slice(0, 100);
+  return [...values.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 function applyVisualFilter(rows, filter) {
   const column = filter?.filterColumn || filter?.column || "";
   const value = filter?.filterValue || filter?.value || "";
   if (!column || !value) return rows || [];
-  return (rows || []).filter((row) => safeText(row[column]) === value);
+  const targetKey = normalizeValueKey(value);
+  return (rows || []).filter((row) => normalizeValueKey(row[column]) === targetKey);
 }
 
 function VisualControls({ rows, columns, state, setState, showMetric = true, showDimension = false, showFilter = true, label = "Chart filters" }) {
-  const dimensions = (columns || []).filter((column) => column.isDimension && column.unique <= 200);
+  const dimensions = (columns || []).filter((column) => column.isDimension && column.unique <= 5000);
   const metrics = (columns || []).filter((column) => column.isNumeric);
-  const filterColumns = (columns || []).filter((column) => column.isDimension && column.unique <= 100);
+  const filterColumns = (columns || []).filter((column) => column.isDimension && column.unique <= 5000);
   const filterColumn = filterColumns.find((column) => column.header === state.filterColumn) || null;
   const options = getColumnOptions(rows, filterColumn);
 
@@ -766,8 +816,8 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
     return counts;
   }, [mapRows, stateColumn]);
 
-  const quantityMetric = useMemo(() => (columns || []).find(isQuantityColumn) || null, [columns]);
-  const amountMetric = useMemo(() => (columns || []).find(isMoneyColumn) || null, [columns]);
+  const quantityMetric = useMemo(() => findPreferredMetric(columns, "quantity"), [columns]);
+  const amountMetric = useMemo(() => findPreferredMetric(columns, "amount"), [columns]);
 
   const stateTotals = useMemo(() => {
     const totals = new Map();
@@ -789,11 +839,11 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
           if (q !== null) current.quantity += q;
         }
         if (amountMetric) {
-          const a = Number(row[amountMetric.header]);
+          const a = parseNumber(row[amountMetric.header]);
           if (Number.isFinite(a)) current.amount += a;
         }
         if (mapMetric) {
-          const m = Number(row[mapMetric.header]);
+          const m = parseNumber(row[mapMetric.header]);
           if (Number.isFinite(m)) current.metric += m;
         }
         totals.set(stateName, current);
@@ -805,6 +855,14 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
   const features = useMemo(() => Array.isArray(geoJson?.features) ? geoJson.features : [], [geoJson]);
   const bounds = useMemo(() => geometryBounds(features), [features]);
   const matchedStates = [...stateCounts.keys()];
+  const hoveredRows = useMemo(() => {
+    if (!hovered || !stateColumn) return [];
+    return (mapRows || []).filter((row) => normalizePlaceName(row[stateColumn.header]) === hovered);
+  }, [hovered, mapRows, stateColumn]);
+  const detailColumns = (columns || []).filter((column) => {
+    const h = text(column.header).toLowerCase();
+    return /party|customer|client|agent|salesman|sales man|address|location|city|district|state|product|invoice|order|vehicle|lorry|date/i.test(h);
+  }).slice(0, 12);
 
   // Strong categorical colours: every detected state gets a clearly different colour.
   // These are deliberately NOT shades of one colour. The legend uses the exact same colour.
@@ -842,14 +900,14 @@ function MapCard({ rows, title = "Location map", metric, columns, state, setStat
             const name = getGeoName(feature);
             const count = stateCounts.get(name) || 0;
             const active = count > 0;
-            return <path key={`${name}-${index}`} d={featurePath(feature, bounds, width, height)} fill={colorForState(name, count)} stroke="var(--border-strong)" strokeWidth={active ? 1.15 : 0.75} vectorEffect="non-scaling-stroke" style={{ cursor: active ? "pointer" : "default", transition: "fill .18s ease, opacity .18s ease" }} opacity={hovered && hovered !== name ? 0.55 : 1} onMouseEnter={() => setHovered(name)} onMouseLeave={() => setHovered(null)} />;
+            return <path key={`${name}-${index}`} d={featurePath(feature, bounds, width, height)} fill={colorForState(name, count)} stroke="var(--border-strong)" strokeWidth={active ? 1.15 : 0.75} vectorEffect="non-scaling-stroke" style={{ cursor: active ? "pointer" : "default", transition: "fill .18s ease, opacity .18s ease" }} opacity={hovered && hovered !== name ? 0.55 : 1} onMouseEnter={() => setHovered(name)} onClick={() => setHovered(name)} onTouchStart={() => setHovered(name)} />;
           })}
         </svg>
-        {hovered && <div style={{ position: "absolute", left: 14, bottom: 14, maxWidth: 300, padding: "9px 12px", borderRadius: 10, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", fontSize: 12 }}><strong>{hovered}</strong><span style={{ display: "block", color: "var(--muted)", marginTop: 4 }}>{formatFullNumber(stateCounts.get(hovered) || 0)} matching record{(stateCounts.get(hovered) || 0) === 1 ? "" : "s"}<br />Quantity: {formatMetricValue(stateTotals.get(hovered)?.quantity || 0, quantityMetric)}<br />Amount: {formatIndianCurrency(stateTotals.get(hovered)?.amount || 0)}{mapMetric && mapMetric.header !== quantityMetric?.header && mapMetric.header !== amountMetric?.header && <><br />{mapMetric.header}: {formatMetricValue(stateTotals.get(hovered)?.metric || 0, mapMetric)}</>}</span></div>}
+        {hovered && <div style={{ position: "absolute", left: 14, bottom: 14, width: "min(390px, calc(100% - 28px))", maxHeight: 280, overflow: "auto", padding: "10px 12px", borderRadius: 10, background: "var(--surface)", border: "1px solid var(--border)", boxShadow: "var(--shadow-sm)", fontSize: 12, zIndex: 5 }}><strong>{hovered}</strong><span style={{ display: "block", color: "var(--muted)", marginTop: 4 }}>{state.filterColumn && state.filterValue ? `${state.filterColumn}: ${state.filterValue}` : "All selected records"}<br />{formatFullNumber(stateCounts.get(hovered) || 0)} matching record{(stateCounts.get(hovered) || 0) === 1 ? "" : "s"}<br />Quantity: {formatMetricValue(stateTotals.get(hovered)?.quantity || 0, quantityMetric)}<br />Amount: {formatIndianCurrency(stateTotals.get(hovered)?.amount || 0)}{mapMetric && mapMetric.header !== quantityMetric?.header && mapMetric.header !== amountMetric?.header && <><br />{mapMetric.header}: {formatMetricValue(stateTotals.get(hovered)?.metric || 0, mapMetric)}</>}</span>{detailColumns.length > 0 && hoveredRows.length > 0 && <div style={{ marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 7 }}>{hoveredRows.slice(0, 6).map((row, index) => <div key={`${row.__row || index}-map-detail`} style={{ padding: "5px 0", borderBottom: "1px solid var(--border)" }}>{detailColumns.map((column) => { const value = safeText(row[column.header]); return value ? <div key={column.header} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><span style={{ color: "var(--muted)" }}>{column.header}</span><strong style={{ textAlign: "right" }}>{column.isNumeric ? formatMetricValue(row[column.header], column) : value}</strong></div> : null; })}</div>)}</div>}</div>}
       </div>
       <div style={{ borderLeft: "1px solid var(--border)", paddingLeft: 16, overflowY: "auto" }}>
         <strong style={{ display: "block", marginBottom: 10 }}>Detected places</strong>
-        {[...stateCounts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => <div key={name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "7px 0", fontSize: 12 }}><span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: colorForState(name, count), border: "1px solid var(--border-strong)" }} />{name}</span><strong>{formatFullNumber(count)}</strong></div>)}
+        {[...stateCounts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => { const totals = stateTotals.get(name) || {}; return <button key={name} type="button" onClick={() => setHovered(name)} style={{ width: "100%", textAlign: "left", display: "grid", gridTemplateColumns: "1fr auto", gap: 4, padding: "8px 0", fontSize: 12, background: "transparent", border: 0, color: "var(--text)", cursor: "pointer" }}><span style={{ display: "flex", alignItems: "center", gap: 7 }}><span style={{ width: 10, height: 10, flex: "0 0 auto", borderRadius: 3, background: colorForState(name, count), border: "1px solid var(--border-strong)" }} /><span><strong style={{ display: "block" }}>{name}</strong><span style={{ color: "var(--muted)", fontSize: 10 }}>{formatFullNumber(count)} records · {formatMetricValue(totals.quantity || 0, quantityMetric)}</span></span></span><span style={{ fontWeight: 700, whiteSpace: "nowrap" }}>{formatIndianCurrency(totals.amount || 0)}</span></button>; })}
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)", color: "var(--muted)", fontSize: 11, lineHeight: 1.45 }}>The map detects Indian state and union-territory names from the current worksheet automatically.</div>
       </div>
     </div>
@@ -905,18 +963,17 @@ function App() {
   const rankingDimension = dimensionByHeader.get(rankingControls.dimension) || primaryDimension;
   const mixDimension = dimensionByHeader.get(mixControls.dimension) || primaryDimension;
 
-  const filterableColumns = useMemo(() => (sheet ? sheet.columns.filter((column) => column.isDimension && column.unique <= 100) : []), [sheet]);
+  const filterableColumns = useMemo(() => (sheet ? sheet.columns.filter((column) => column.isDimension && column.unique <= 5000) : []), [sheet]);
   const uniqueOptions = useMemo(() => {
     if (!sheet) return {};
     const result = {};
     for (const column of filterableColumns) {
-      const set = new Set();
+      const values = new Map();
       for (const row of sheet.rows) {
         const value = safeText(row[column.header]);
-        if (value) set.add(value);
-        if (set.size > 100) break;
+        if (value) canonicalDisplayValue(values, value);
       }
-      result[column.header] = [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).slice(0, 100);
+      result[column.header] = [...values.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }
     return result;
   }, [sheet, filterableColumns]);
@@ -931,7 +988,7 @@ function App() {
       }
       for (const column of filterableColumns) {
         const selected = filters[column.header];
-        if (selected && safeText(row[column.header]) !== selected) return false;
+        if (selected && normalizeValueKey(row[column.header]) !== normalizeValueKey(selected)) return false;
       }
       if (query) {
         let found = false;
