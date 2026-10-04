@@ -159,11 +159,8 @@ function formatCell(value, column = null) {
 function aggregateCategory(rows, dimension, metric) {
   if (!dimension || !metric) return [];
   const map = new Map();
-  const displayNames = new Map();
   for (const row of rows) {
-    const rawKey = safeText(row[dimension.header]);
-    const key = normalizeValueKey(rawKey) || "(blank / missing)";
-    if (rawKey && !displayNames.has(key)) displayNames.set(key, rawKey);
+    const key = safeText(row[dimension.header]) || "(Blank / missing)";
     const value = parseNumber(row[metric.header]);
     if (!Number.isFinite(value)) continue;
     const current = map.get(key) || { value: 0, records: [] };
@@ -172,7 +169,7 @@ function aggregateCategory(rows, dimension, metric) {
     map.set(key, current);
   }
   return [...map.entries()]
-    .map(([key, item]) => ({ name: displayNames.get(key) || key, value: Math.round(item.value * 100) / 100, records: item.records, metricColumn: metric }))
+    .map(([name, item]) => ({ name, value: Math.round(item.value * 100) / 100, records: item.records, metricColumn: metric }))
     .sort((a, b) => b.value - a.value);
 }
 
@@ -280,22 +277,6 @@ function text(value) {
     try { return JSON.stringify(value); } catch { return String(value); }
   }
   return String(value).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function normalizeValueKey(value) {
-  // Treat harmless presentation differences as the same logical value.
-  // Examples: "West Bengal" = "WEST BENGAL", "S k enterprises" = "S K Enterprises".
-  const raw = text(value);
-  if (!raw) return "";
-  return raw.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase("en-IN");
-}
-
-function canonicalDisplayValue(map, value) {
-  const raw = text(value);
-  if (!raw) return "";
-  const key = normalizeValueKey(raw);
-  if (!map.has(key)) map.set(key, raw);
-  return map.get(key);
 }
 
 function isoDate(date) {
@@ -418,7 +399,7 @@ function detectColumns(rows, headers) {
     for (let i = 0; i < rows.length; i += 1) {
       const value = rows[i][index];
       values[i] = value;
-      const normalized = normalizeValueKey(value);
+      const normalized = text(value);
       if (normalized) uniqueSet.add(normalized);
     }
     const type = inferType(values, header);
@@ -483,6 +464,12 @@ function cleanSheet(sheet, name) {
   }
 
   const columns = detectColumns(matrix, headers);
+
+  // One canonical display value per text column. Matching is case/spacing/
+  // Unicode-normalized, while the first spelling in the workbook is retained.
+  const displayCanonicalValues = Object.fromEntries(
+    columns.map((column) => [column.header, new Map()])
+  );
   const rows = new Array(matrix.length);
   for (let r = 0; r < matrix.length; r += 1) {
     const source = matrix[r];
@@ -617,20 +604,19 @@ function FilterSelect({ label, value, options, onChange }) {
 
 function getColumnOptions(rows, column) {
   if (!column) return [];
-  const values = new Map();
+  const values = new Set();
   for (const row of rows || []) {
     const value = safeText(row[column.header]);
-    if (value) canonicalDisplayValue(values, value);
+    if (value) values.add(value);
   }
-  return [...values.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  return [...values].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 function applyVisualFilter(rows, filter) {
   const column = filter?.filterColumn || filter?.column || "";
   const value = filter?.filterValue || filter?.value || "";
   if (!column || !value) return rows || [];
-  const targetKey = normalizeValueKey(value);
-  return (rows || []).filter((row) => normalizeValueKey(row[column]) === targetKey);
+  return (rows || []).filter((row) => safeText(row[column]) === value);
 }
 
 function VisualControls({ rows, columns, state, setState, showMetric = true, showDimension = false, showFilter = true, label = "Chart filters" }) {
@@ -968,12 +954,12 @@ function App() {
     if (!sheet) return {};
     const result = {};
     for (const column of filterableColumns) {
-      const values = new Map();
+      const set = new Set();
       for (const row of sheet.rows) {
         const value = safeText(row[column.header]);
-        if (value) canonicalDisplayValue(values, value);
+        if (value) set.add(value);
       }
-      result[column.header] = [...values.values()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      result[column.header] = [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }
     return result;
   }, [sheet, filterableColumns]);
@@ -988,7 +974,7 @@ function App() {
       }
       for (const column of filterableColumns) {
         const selected = filters[column.header];
-        if (selected && normalizeValueKey(row[column.header]) !== normalizeValueKey(selected)) return false;
+        if (selected && safeText(row[column.header]) !== selected) return false;
       }
       if (query) {
         let found = false;
