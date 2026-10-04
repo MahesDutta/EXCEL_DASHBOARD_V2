@@ -99,24 +99,6 @@ function findPreferredMetric(columns, kind) {
   return null;
 }
 
-function formatMetricValue(value, column) {
-  if (isQuantityColumn(column)) {
-    const mt = quantityToMT(value, column);
-    return mt === null ? "—" : `${new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 3 }).format(mt)} MT`;
-  }
-  if (isMoneyColumn(column)) return formatIndianCurrency(value);
-  return formatFullNumber(value);
-}
-
-function formatMetricAxis(value, column) {
-  if (isQuantityColumn(column)) {
-    const mt = quantityToMT(value, column);
-    return mt === null ? "—" : `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(mt)} MT`;
-  }
-  if (isMoneyColumn(column)) return formatIndianCurrency(value);
-  return formatFullNumber(value);
-}
-
 function findLocationColumn(columns) {
   const list = columns || [];
   return list.find((column) => /^(state|states|state name|province)$/i.test(text(column.header).trim()))
